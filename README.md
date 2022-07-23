@@ -1,15 +1,15 @@
 # WAF 
+使用Nginx+Lua实现自定义WAF（Web application firewall）
 
-- 使用Nginx+Lua实现自定义WAF（Web application firewall）
-- 最近发现使用的人越来越多了，计划开始维护和增加新功能 2020.7.29 赵班长
+WAF一句话描述，就是解析HTTP请求（协议解析模块），规则检测（规则模块），做不同的防御动作（动作模块），并将防御过程（日志模块）记录下来。所以本文中的WAF的实现由五个模块(配置模块、协议解析模块、规则模块、动作模块、错误处理模块）组成。
 
-## 项目背景介绍
+来源：<https://github.com/unixhot/waf>
 
-### 需求产生
+参考：
+* https://github.com/openresty/lua-nginx-module
+* https://github.com/wubonetcn/luawaf
 
-由于原生态的Nginx的一些安全防护功能有限，就研究能不能自己编写一个WAF，参考Kindle大神的ngx_lua_waf，自己尝试写一个了，使用两天时间，边学Lua，边写。不过不是安全专业，只实现了一些比较简单的功能：
-
-### 功能列表：
+## 功能列表：
 
 1.	支持IP白名单和黑名单功能，直接将黑名单的IP访问拒绝。
 2.	支持URL白名单，将不需要过滤的URL进行定义。
@@ -21,16 +21,44 @@
 8.	支持日志记录，将所有拒绝的操作，记录到日志中去。
 9.	日志记录为JSON格式，便于日志分析，例如使用ELK进行攻击日志收集、存储、搜索和展示。
 
-### WAF实现
+在原来的基础上做的调整：
+1. 将以前请求时读取规则配置修改为初始化时读取，以提高性能，更新规则后需要执行`nginx -s reload`
+2. lua代码中的变量全部改为使用局部变量，通过return导出
+3. 将lib.lua的代码合并到了init.lua
+3. 新增cc配置基于ip还是uri，默认为IP
+4. 默认删除nginx和php的版本响应头，防止泄漏软件和版本，配置项是:config.header_server,config.header_php
+5. 修改获取IP默认获取remote_addr，防止伪造IP，如果有代理服务器再设置获取真实IP的请求头，配置项是:config.get_client_ip_header
+6. 新增POST拦截支持，包含form-data、x-www-form-urlencoded、raw、binary的检测
+7. 新增文件上传类型白名单限制，防止上传木马文件，配置项是:config.white_upload_file_ext
+8. 不处理内部请求，防止重复执行waf，以提高性能
+9. 所有匹配一律修改为不区分大小写的匹配
+10. 新增扫描器拦截支持
 
-WAF一句话描述，就是解析HTTP请求（协议解析模块），规则检测（规则模块），做不同的防御动作（动作模块），并将防御过程（日志模块）记录下来。所以本文中的WAF的实现由五个模块(配置模块、协议解析模块、规则模块、动作模块、错误处理模块）组成。
+## 文件说明
+```
+└─waf
+  │ config.lua          # 配置文件
+  │ init.lua            # nginx启动初始化时执行的脚本
+  │ access.lua          # 每个请求到达时执行的脚本
+  │ header_filter.lua   # 修改相应头的脚本
+  └─rule-config         # 规则配置文件夹
+      args.rule         # 请求参数规则
+      blackip.rule      # 黑名单匹配规则
+      cookie.rule       # cookie匹配规则
+      deny.html         # 触发waf显示的html页面
+      post.rule         # post匹配规则
+      url.rule          # url匹配规则
+      useragent.rule    # 用户代理匹配规则
+      whiteip.rule      # 白名单IP列表
+      whiteurl.rule     # 白名单url匹配规则
+```
 
 ## 安装部署
 
 以下方案选择其中之一即可：
 
 - 选择1: 可以选择使用原生的Nginx，增加Lua模块实现部署。
-- 选择2: 直接使用OpenResty
+- 选择2: 直接使用OpenResty（推荐）
 
 ### OpenResty安装
 
@@ -39,15 +67,15 @@ WAF一句话描述，就是解析HTTP请求（协议解析模块），规则检�
 源码安装和Yum安装选择其一即可，默认均安装在/usr/local/openresty目录下。
 
 ```
-[root@opsany ~]# wget https://openresty.org/package/centos/openresty.repo
-[root@opsany ~]# sudo mv openresty.repo /etc/yum.repos.d/
-[root@opsany ~]# sudo yum install -y openresty
+wget https://openresty.org/package/centos/openresty.repo
+sudo mv openresty.repo /etc/yum.repos.d/
+sudo yum install -y openresty
 ```
 
 2. 测试OpenResty和运行Lua
 
 ```
-[root@opsany ~]# vim /usr/local/openresty/nginx/conf/nginx.conf
+vim /usr/local/openresty/nginx/conf/nginx.conf
 #在默认的server配置中增加
         location /hello {
             default_type text/html;
@@ -55,34 +83,43 @@ WAF一句话描述，就是解析HTTP请求（协议解析模块），规则检�
                 ngx.say("<p>hello, world</p>")
             }
         }
-[root@opsany ~]# /usr/local/openresty/nginx/sbin/nginx -t
+/usr/local/openresty/nginx/sbin/nginx -t
 nginx: the configuration file /usr/local/openresty-1.17.8.2/nginx/conf/nginx.conf syntax is ok
 nginx: configuration file /usr/local/openresty-1.17.8.2/nginx/conf/nginx.conf test is successful
-[root@opsany ~]# /usr/local/openresty/nginx/sbin/nginx
+/usr/local/openresty/nginx/sbin/nginx
 ```
 
 3. 测试访问
 
 ```
-[root@opsany ~]# curl http://127.0.0.1/hello
+curl http://127.0.0.1/hello
 <p>hello, world</p>
 ```
 
 ### WAF部署
 
+```bash
+wget https://github.com/zhanguangcheng/nginx-lua-waf/archive/refs/heads/master.zip
+unzip master.zip
+cp -r ./nginx-lua-waf-master/waf /usr/local/openresty/nginx/conf/
 ```
-[root@opsany ~]# git clone https://github.com/unixhot/waf.git
-[root@opsany ~]# cp -r ./waf/waf /usr/local/openresty/nginx/conf/
-[root@opsany ~]# vim /usr/local/openresty/nginx/conf/nginx.conf
-#在http{}中增加，注意路径，同时WAF日志默认存放在/tmp/日期_waf.log
-#WAF
+
+vim /usr/local/openresty/nginx/conf/nginx.conf
+#在http{}中增加，注意路径，同时WAF日志默认存放在/usr/local/openresty/nginx/logs/waf.log
+```nginx
+http {
     lua_shared_dict limit 50m;
-    lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua";
+    lua_package_path "/usr/local/openresty/nginx/conf/waf/?.lua;;";
     init_by_lua_file "/usr/local/openresty/nginx/conf/waf/init.lua";
     access_by_lua_file "/usr/local/openresty/nginx/conf/waf/access.lua";
-[root@opsany ~]# ln -s /usr/local/openresty/lualib/resty/ /usr/local/openresty/nginx/conf/waf/resty
-[root@opsany ~]# /usr/local/openresty/nginx/sbin/nginx -t
-[root@opsany ~]# /usr/local/openresty/nginx/sbin/nginx -s reload
+    header_filter_by_lua_file "/usr/local/openresty/nginx/conf/waf/header_filter.lua";
+}
+```
+
+```bash
+ln -s /usr/local/openresty/lualib/resty/ /usr/local/openresty/nginx/conf/waf/resty
+/usr/local/openresty/nginx/sbin/nginx -t
+/usr/local/openresty/nginx/sbin/nginx -s reload
 ```
 
 # 附录

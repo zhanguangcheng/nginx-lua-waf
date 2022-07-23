@@ -1,6 +1,8 @@
+/\.
 \.(htaccess|bash_history)
-\.(bak|inc|old|mdb|sql|backup|java|class|tgz|gz|tar|zip)$
+\.(java|go|py|do|log|exe|ini|bak|backup|bin|inc|old|db|mdb|sqlite3?|sql|backup|java|jar|war|class|tgz|gz|tar)$
 (phpmyadmin|jmx-console|admin-console|jmxinvokerservlet)
 java\.lang
 \.svn\/
-/(attachments|upimg|images|css|uploadfiles|html|uploads|templets|static|template|data|inc|forumdata|upload|includes|cache|avatar)/(\\w+).(php|jsp)
+\.git\/
+/(attachment|attachments|upimg|images|css|uploadfiles|html|uploads|templets|static|template|data|inc|forumdata|upload|includes|cache|avatar)/(\\w+).(php|jsp)
